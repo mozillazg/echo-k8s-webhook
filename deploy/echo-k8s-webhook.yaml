@@ -1,0 +1,232 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: echo-k8s-webhook
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: echo-k8s-webhook
+  namespace: echo-k8s-webhook
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: echo-k8s-webhook-role
+  namespace: echo-k8s-webhook
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - list
+      - create
+      - watch
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - echo-k8s-webhook-server-cert
+    verbs:
+      - delete
+      - get
+      - patch
+      - update
+      - watch
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: echo-k8s-webhook-rolebinding
+  namespace: echo-k8s-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: echo-k8s-webhook-role
+subjects:
+  - kind: ServiceAccount
+    name: echo-k8s-webhook
+    namespace: echo-k8s-webhook
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: echo-k8s-webhook-clusterrole
+rules:
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resources:
+      - validatingwebhookconfigurations
+    verbs:
+      - list
+      - watch
+  - apiGroups:
+      - admissionregistration.k8s.io
+    resourceNames:
+      - echo-k8s-webhook
+    resources:
+      - validatingwebhookconfigurations
+    verbs:
+      - get
+      - patch
+      - update
+      - watch
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: echo-k8s-webhook-clusterrolebinding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: echo-k8s-webhook-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: echo-k8s-webhook
+    namespace: echo-k8s-webhook
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: echo-k8s-webhook-server-cert
+  namespace: echo-k8s-webhook
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: echo-k8s-webhook
+    app.kubernetes.io/component: controller
+  name: echo-k8s-webhook
+  namespace: echo-k8s-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: echo-k8s-webhook
+      app.kubernetes.io/component: controller
+  template:
+    metadata:
+      labels:
+        app: echo-k8s-webhook
+        app.kubernetes.io/component: controller
+    spec:
+      serviceAccountName: echo-k8s-webhook
+      containers:
+        - args:
+            - --health-addr=:9090
+            - --port=9443
+            - --cert-dir=/certs
+            - --logtostderr
+          image: mozillazg/echo-k8s-webhook:0.1.0
+          imagePullPolicy: Always
+          name: webhook
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+          resources:
+            limits:
+              cpu: 100m
+              memory: 50Mi
+            requests:
+              cpu: 100m
+              memory: 20Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9090
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+          ports:
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+            - containerPort: 9090
+              name: healthz
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - mountPath: /certs
+              name: cert
+              readOnly: true
+      nodeSelector:
+        kubernetes.io/os: linux
+      volumes:
+        - name: cert
+          secret:
+            defaultMode: 420
+            secretName: echo-k8s-webhook-server-cert
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: echo-k8s-webhook
+    app.kubernetes.io/component: controller
+  name: echo-k8s-webhook-service
+  namespace: echo-k8s-webhook
+spec:
+  ports:
+    - name: https-webhook
+      port: 443
+      protocol: TCP
+      targetPort: 9443
+  selector:
+    app: echo-k8s-webhook
+    app.kubernetes.io/component: controller
+
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  labels:
+    app.kubernetes.io/component: admission-webhook
+  name: echo-k8s-webhook
+webhooks:
+  - name: echo.k8s.webhook
+    matchPolicy: Equivalent
+    rules:
+      - apiGroups:
+          - '*'
+        apiVersions:
+          - '*'
+        operations:
+          - '*'
+        resources:
+          - '*'
+    failurePolicy: Ignore
+    sideEffects: None
+    admissionReviewVersions:
+      - v1
+      - v1beta1
+    clientConfig:
+      service:
+        namespace: echo-k8s-webhook
+        name: echo-k8s-webhook-service
+        path: /webhook
+    timeoutSeconds: 3
