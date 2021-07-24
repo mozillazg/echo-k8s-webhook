@@ -210,15 +210,19 @@ metadata:
 webhooks:
   - name: echo.k8s.webhook
     matchPolicy: Equivalent
+    objectSelector:
+      matchLabels:
+        echo-k8s-webhook-enabled: 'true'
     rules:
-      - apiGroups:
+      - operations:
+          - '*'
+        apiGroups:
           - '*'
         apiVersions:
           - '*'
-        operations:
-          - '*'
         resources:
-          - '*'
+          - '*/*'
+        scope: "*"
     failurePolicy: Ignore
     sideEffects: None
     admissionReviewVersions:
