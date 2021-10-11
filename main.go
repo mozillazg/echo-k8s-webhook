@@ -1,12 +1,15 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
-	"github.com/open-policy-agent/cert-controller/pkg/rotator"
-	"k8s.io/apimachinery/pkg/types"
+	"github.com/mozillazg/webhookcert/pkg/cert"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -31,6 +34,7 @@ var (
 	healthAddr = flag.String("health-addr", ":9090", "The address to which the health endpoint binds")
 	port       = flag.Int("port", webhook.DefaultPort, "port for the server")
 	certDir    = flag.String("cert-dir", "/certs", "The directory where certs are stored")
+	namespace  = flag.String("namespace", "", "namespace of pod")
 )
 
 func init() {
@@ -43,8 +47,10 @@ func main() {
 	klog.InitFlags(nil)
 	flag.Parse()
 
-	namespace := os.Getenv("POD_NAMESPACE")
-	dnsName := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+	if *namespace == "" {
+		*namespace = os.Getenv("POD_NAMESPACE")
+	}
+	dnsName := fmt.Sprintf("%s.%s.svc", serviceName, *namespace)
 
 	entryLog.Info("setting up manager")
 	mgr, err := manager.New(config.GetConfigOrDie(), manager.Options{
@@ -60,29 +66,8 @@ func main() {
 	}
 
 	setupFinished := make(chan struct{})
-	entryLog.Info("setting up cert rotation")
-	webhooks := []rotator.WebhookInfo{
-		{
-			Name: vWCName,
-			Type: rotator.Validating,
-		},
-	}
-	// TODO: User another lib to avoid need list and watch all secrets permissions
-	if err := rotator.AddRotator(mgr, &rotator.CertRotator{
-		SecretKey: types.NamespacedName{
-			Namespace: namespace,
-			Name:      secretName,
-		},
-		CertDir:        *certDir,
-		CAName:         caName,
-		CAOrganization: caOrganization,
-		DNSName:        dnsName,
-		IsReady:        setupFinished,
-		Webhooks:       webhooks,
-	}); err != nil {
-		entryLog.Error(err, "unable to set up cert rotation")
-		os.Exit(1)
-	}
+	entryLog.Info("setting up cert")
+	ensureCertReady(dnsName, setupFinished, time.Minute)
 
 	_ = mgr.AddHealthzCheck("default", healthz.Ping)
 	_ = mgr.AddReadyzCheck("default", healthz.Ping)
@@ -95,6 +80,38 @@ func main() {
 		entryLog.Error(err, "unable to run manager")
 		os.Exit(1)
 	}
+}
+
+func ensureCertReady(dnsName string, setupFinished chan struct{}, timeout time.Duration) {
+	kubeclient := kubernetes.NewForConfigOrDie(config.GetConfigOrDie())
+	dyclient := dynamic.NewForConfigOrDie(config.GetConfigOrDie())
+	webhooks := []cert.WebhookInfo{
+		{
+			Type: cert.ValidatingV1,
+			Name: vWCName,
+		},
+	}
+	webhookcert := cert.NewWebhookCert(cert.CertOption{
+		CAName:          caName,
+		CAOrganizations: []string{caOrganization},
+		DNSNames:        []string{dnsName},
+		CommonName:      dnsName,
+		CertDir:         *certDir,
+		SecretInfo: cert.SecretInfo{
+			Name:      secretName,
+			Namespace: *namespace,
+		},
+	}, webhooks, kubeclient, dyclient)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		err := webhookcert.EnsureCertReady(ctx)
+		if err != nil {
+			klog.Fatalf("ensure cert ready failed: %+v", err)
+		}
+		close(setupFinished)
+	}()
 }
 
 func setupControllers(mgr manager.Manager, setupFinished chan struct{}) {

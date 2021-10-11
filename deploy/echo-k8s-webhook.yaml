@@ -23,9 +23,7 @@ rules:
     resources:
       - secrets
     verbs:
-      - list
       - create
-      - watch
   - apiGroups:
       - ""
     resources:
@@ -33,11 +31,9 @@ rules:
     resourceNames:
       - echo-k8s-webhook-server-cert
     verbs:
-      - delete
       - get
       - patch
       - update
-      - watch
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -64,20 +60,12 @@ rules:
       - admissionregistration.k8s.io
     resources:
       - validatingwebhookconfigurations
-    verbs:
-      - list
-      - watch
-  - apiGroups:
-      - admissionregistration.k8s.io
     resourceNames:
       - echo-k8s-webhook
-    resources:
-      - validatingwebhookconfigurations
     verbs:
       - get
       - patch
       - update
-      - watch
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -120,6 +108,8 @@ spec:
       labels:
         app: echo-k8s-webhook
         app.kubernetes.io/component: controller
+      annotations:
+        container.seccomp.security.alpha.kubernetes.io/webhook: runtime/default
     spec:
       serviceAccountName: echo-k8s-webhook
       containers:
