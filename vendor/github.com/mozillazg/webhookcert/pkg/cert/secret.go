@@ -54,7 +54,7 @@ type CertManager struct {
 func (c *CertManager) ensureSecret(ctx context.Context) (*corev1.Secret, error) {
 	secret, err := c.ensureSecretWithoutRetry(ctx)
 	if err != nil {
-		if apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) {
+		if apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
 			return c.ensureSecretWithoutRetry(ctx)
 		}
 	}
@@ -78,7 +78,7 @@ func (c *CertManager) ensureSecretWithoutRetry(ctx context.Context) (*corev1.Sec
 	}
 	_, err = c.buildArtifactsFromSecret(secret)
 	if err != nil {
-		klog.Warningf("parse cert from secret %s failed, will update exist secret. %s", name, err)
+		klog.Warningf("parse cert from secret %s failed, will update exist secret: %s", name, err)
 		newSecret, err := c.newSecret()
 		if err != nil {
 			return nil, errors.Errorf("new secret: %w", err)

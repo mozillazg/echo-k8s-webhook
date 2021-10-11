@@ -9,5 +9,3 @@ require (
 	k8s.io/klog/v2 v2.9.0
 	sigs.k8s.io/controller-runtime v0.9.2
 )
-
-replace github.com/mozillazg/webhookcert => ../webhookcert
