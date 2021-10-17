@@ -118,7 +118,7 @@ spec:
             - --port=9443
             - --cert-dir=/certs
             - --logtostderr
-          image: mozillazg/echo-k8s-webhook:0.1.0
+          image: mozillazg/echo-k8s-webhook:0.2.0
           imagePullPolicy: Always
           name: webhook
           env:
