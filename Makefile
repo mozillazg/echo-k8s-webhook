@@ -1,6 +1,6 @@
 
 IMAGE ?= mozillazg/echo-k8s-webhook
-TAG ?= 0.2.0
+TAG ?= 0.3.0
 
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= amd64

@@ -6,7 +6,6 @@ import (
 	"time"
 
 	errors "golang.org/x/xerrors"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -14,8 +13,10 @@ import (
 )
 
 type CertOption struct {
-	CAName               string
-	CAOrganizations      []string
+	CAName          string
+	CAOrganizations []string
+	Hosts           []string
+	// Deprecated: user Hosts instead
 	DNSNames             []string
 	CommonName           string
 	CertDir              string
@@ -24,32 +25,22 @@ type CertOption struct {
 	SecretInfo SecretInfo
 }
 
-type WebhookOption struct {
-	secretKey types.NamespacedName
-	webhooks  []WebhookInfo
-}
-
 type WebhookCert struct {
-	certOpt        CertOption
-	webhooks       []WebhookInfo
-	kubeclient     kubernetes.Interface
-	dyclient       dynamic.Interface
-	certmanager    *CertManager
-	webhookmanager *WebhookManager
+	certOpt CertOption
+
+	certmanager    *certManager
+	webhookmanager *webhookManager
 }
 
 func NewWebhookCert(certOpt CertOption, webhooks []WebhookInfo, kubeclient kubernetes.Interface, dyclient dynamic.Interface) *WebhookCert {
 	return &WebhookCert{
-		certOpt:    certOpt,
-		webhooks:   webhooks,
-		kubeclient: kubeclient,
-		dyclient:   dyclient,
-		certmanager: &CertManager{
-			secretInfo:    certOpt.SecretInfo,
-			certOpt:       certOpt,
-			secretsGetter: kubeclient.CoreV1(),
+		certOpt: certOpt,
+		certmanager: &certManager{
+			secretInfo:   certOpt.SecretInfo,
+			certOpt:      certOpt,
+			secretClient: kubeclient.CoreV1().Secrets(certOpt.SecretInfo.Namespace),
 		},
-		webhookmanager: &WebhookManager{
+		webhookmanager: &webhookManager{
 			webhooks: webhooks,
 			dyclient: dyclient,
 		},
@@ -78,7 +69,7 @@ func (w *WebhookCert) ensureCert(ctx context.Context) error {
 	if err != nil {
 		return errors.Errorf("parse secret: %w", err)
 	}
-	err = w.webhookmanager.ensureCA(ctx, ka.CertPEM)
+	err = w.webhookmanager.ensureCA(ctx, ka.certPEM)
 	if err == nil {
 		klog.Info("ensure webhook ca config success")
 	}
@@ -107,9 +98,16 @@ func (w *WebhookCert) ensureCertsMounted(ctx context.Context) error {
 	return nil
 }
 
-func (c CertOption) GetCertValidityDuration() time.Duration {
+func (c CertOption) getCertValidityDuration() time.Duration {
 	if c.CertValidityDuration == 0 {
 		return certValidityDuration
 	}
 	return c.CertValidityDuration
+}
+
+func (c CertOption) getHots() []string {
+	hosts := []string{}
+	hosts = append(hosts, c.DNSNames...)
+	hosts = append(hosts, c.Hosts...)
+	return hosts
 }

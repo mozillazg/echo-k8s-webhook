@@ -48,7 +48,11 @@ github.com/matttproud/golang_protobuf_extensions/pbutil
 github.com/modern-go/concurrent
 # github.com/modern-go/reflect2 v1.0.1
 github.com/modern-go/reflect2
-# github.com/mozillazg/webhookcert v0.1.0
+# github.com/mozillazg/pkiutil v0.2.0
+github.com/mozillazg/pkiutil/pkg/decoder
+github.com/mozillazg/pkiutil/pkg/encoder
+github.com/mozillazg/pkiutil/pkg/generator
+# github.com/mozillazg/webhookcert v0.2.0
 ## explicit
 github.com/mozillazg/webhookcert/pkg/cert
 # github.com/pkg/errors v0.9.1

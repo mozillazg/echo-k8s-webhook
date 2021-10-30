@@ -28,12 +28,12 @@ type WebhookInfo struct {
 	Name string
 }
 
-type WebhookManager struct {
+type webhookManager struct {
 	webhooks []WebhookInfo
 	dyclient dynamic.Interface
 }
 
-func (w *WebhookManager) ensureCA(ctx context.Context, caPem []byte) error {
+func (w *webhookManager) ensureCA(ctx context.Context, caPem []byte) error {
 	for _, info := range w.webhooks {
 		if err := w.ensureWebhookCA(ctx, info, caPem); err != nil {
 			return errors.Errorf("ensure ca for webhook %s: %w", info.Name, err)
@@ -42,8 +42,8 @@ func (w *WebhookManager) ensureCA(ctx context.Context, caPem []byte) error {
 	return nil
 }
 
-func (w *WebhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, caPem []byte) error {
-	gvs, err := info.Type.gvs()
+func (w *webhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, caPem []byte) error {
+	gvs, err := info.Type.gvr()
 	if err != nil {
 		return errors.Errorf(": %w", err)
 	}
@@ -71,7 +71,7 @@ func (w *WebhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, 
 	return nil
 }
 
-func (t WebhookType) gvs() (*schema.GroupVersionResource, error) {
+func (t WebhookType) gvr() (*schema.GroupVersionResource, error) {
 	switch t {
 	case ValidatingV1:
 		return &schema.GroupVersionResource{
@@ -98,10 +98,10 @@ func (t WebhookType) gvs() (*schema.GroupVersionResource, error) {
 			Resource: "mutatingwebhookconfigurations",
 		}, nil
 	}
-	return nil, errors.Errorf("unkown type: %s", t)
+	return nil, errors.Errorf("unknown type: %s", t)
 }
 
-func injectCertToWebhook(wh *unstructured.Unstructured, caPem []byte) (bool, error) {
+func injectCertToWebhook(wh *unstructured.Unstructured, caPem []byte) (changed bool, err error) {
 	webhooks, found, err := unstructured.NestedSlice(wh.Object, "webhooks")
 	if err != nil {
 		return false, errors.Errorf(": %w", err)
@@ -110,7 +110,6 @@ func injectCertToWebhook(wh *unstructured.Unstructured, caPem []byte) (bool, err
 		return false, errors.Errorf("`webhooks` field not found in %s", wh.GetKind())
 	}
 
-	var changed bool
 	for i, h := range webhooks {
 		h := h
 		hook, ok := h.(map[string]interface{})
@@ -126,7 +125,7 @@ func injectCertToWebhook(wh *unstructured.Unstructured, caPem []byte) (bool, err
 			}
 		}
 		ch, certPem := mergeCAPemCerts(oldPem, caPem)
-		if !ch {
+		if len(certPem) == 0 || !ch {
 			continue
 		} else {
 			changed = true

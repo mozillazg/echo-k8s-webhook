@@ -3,21 +3,19 @@ package cert
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"time"
 
+	"github.com/mozillazg/pkiutil/pkg/decoder"
+	"github.com/mozillazg/pkiutil/pkg/encoder"
+	certgen "github.com/mozillazg/pkiutil/pkg/generator"
 	errors "golang.org/x/xerrors"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	klog "k8s.io/klog/v2"
 )
 
@@ -26,32 +24,42 @@ const (
 	keyName              = "tls.key"
 	caCertName           = "ca.crt"
 	caKeyName            = "ca.key"
-	certValidityDuration = time.Hour * 24 * 365 * 10
+	certValidityDuration = time.Hour * 24 * 365 * 10 // 10 years
 )
 
-type KeyPairArtifacts struct {
-	Cert    *x509.Certificate
-	Key     *rsa.PrivateKey
-	CertPEM []byte
-	KeyPEM  []byte
+type keyPairArtifacts struct {
+	cert    *x509.Certificate
+	key     *rsa.PrivateKey
+	certPEM []byte
+	keyPEM  []byte
 }
 
 type SecretInfo struct {
-	Name       string
-	Namespace  string
+	Name      string
+	Namespace string
+
 	caCertName string
 	caKeyName  string
 	certName   string
 	keyName    string
+
+	// dont save ca key to secret?
+	dontSaveCaKey bool
 }
 
-type CertManager struct {
-	secretInfo    SecretInfo
-	certOpt       CertOption
-	secretsGetter v1.SecretsGetter
+type certManager struct {
+	secretInfo   SecretInfo
+	certOpt      CertOption
+	secretClient secretInterface
 }
 
-func (c *CertManager) ensureSecret(ctx context.Context) (*corev1.Secret, error) {
+type secretInterface interface {
+	Create(ctx context.Context, secret *corev1.Secret, opts metav1.CreateOptions) (*corev1.Secret, error)
+	Update(ctx context.Context, secret *corev1.Secret, opts metav1.UpdateOptions) (*corev1.Secret, error)
+	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1.Secret, error)
+}
+
+func (c *certManager) ensureSecret(ctx context.Context) (*corev1.Secret, error) {
 	secret, err := c.ensureSecretWithoutRetry(ctx)
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
@@ -61,8 +69,8 @@ func (c *CertManager) ensureSecret(ctx context.Context) (*corev1.Secret, error) 
 	return secret, err
 }
 
-func (c *CertManager) ensureSecretWithoutRetry(ctx context.Context) (*corev1.Secret, error) {
-	client := c.secretsGetter.Secrets(c.secretInfo.Namespace)
+func (c *certManager) ensureSecretWithoutRetry(ctx context.Context) (*corev1.Secret, error) {
+	client := c.secretClient
 	name := c.secretInfo.Name
 	secret, err := client.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
@@ -90,11 +98,11 @@ func (c *CertManager) ensureSecretWithoutRetry(ctx context.Context) (*corev1.Sec
 	return secret, nil
 }
 
-func (c *CertManager) newSecret() (*corev1.Secret, error) {
-	var caArtifacts *KeyPairArtifacts
+func (c *certManager) newSecret() (*corev1.Secret, error) {
+	var caArtifacts *keyPairArtifacts
 	now := time.Now()
 	begin := now.Add(-1 * time.Hour)
-	end := now.Add(c.certOpt.GetCertValidityDuration())
+	end := now.Add(c.certOpt.getCertValidityDuration())
 	caArtifacts, err := c.createCACert(begin, end)
 	if err != nil {
 		return nil, errors.Errorf("create ca cert: %w", err)
@@ -114,121 +122,99 @@ func (c *CertManager) newSecret() (*corev1.Secret, error) {
 	return secret, nil
 }
 
-func (c *CertManager) populateSecret(cert, key []byte, caArtifacts *KeyPairArtifacts, secret *corev1.Secret) {
+func (c *certManager) populateSecret(cert, key []byte, caArtifacts *keyPairArtifacts, secret *corev1.Secret) {
 	if secret.Data == nil {
 		secret.Data = make(map[string][]byte)
 	}
-	secret.Data[c.secretInfo.getCACertName()] = caArtifacts.CertPEM
-	secret.Data[c.secretInfo.getCAKeyName()] = caArtifacts.KeyPEM
+	secret.Data[c.secretInfo.getCACertName()] = caArtifacts.certPEM
+	if !c.secretInfo.dontSaveCaKey {
+		secret.Data[c.secretInfo.getCAKeyName()] = caArtifacts.keyPEM
+	}
 	secret.Data[c.secretInfo.getCertName()] = cert
 	secret.Data[c.secretInfo.getKeyName()] = key
 }
 
-func (c *CertManager) buildArtifactsFromSecret(secret *corev1.Secret) (*KeyPairArtifacts, error) {
+func (c *certManager) buildArtifactsFromSecret(secret *corev1.Secret) (*keyPairArtifacts, error) {
 	caPem, ok := secret.Data[c.secretInfo.getCACertName()]
 	if !ok {
 		return nil, errors.New(fmt.Sprintf("Cert secret is not well-formed, missing %s", c.secretInfo.caCertName))
 	}
-	keyPem, ok := secret.Data[c.secretInfo.getCAKeyName()]
-	if !ok {
-		return nil, errors.New(fmt.Sprintf("Cert secret is not well-formed, missing %s", c.secretInfo.caKeyName))
-	}
-	caDer, _ := pem.Decode(caPem)
-	if caDer == nil {
-		return nil, errors.New("bad CA cert")
-	}
-	caCert, err := x509.ParseCertificate(caDer.Bytes)
+	caCert, _, err := decoder.DecodePemCert(caPem)
 	if err != nil {
 		return nil, errors.Errorf("while parsing CA cert: %w", err)
 	}
-	keyDer, _ := pem.Decode(keyPem)
-	if keyDer == nil {
-		return nil, errors.New("bad CA cert")
+	kp := &keyPairArtifacts{
+		cert:    caCert,
+		certPEM: caPem,
 	}
-	key, err := x509.ParsePKCS1PrivateKey(keyDer.Bytes)
-	if err != nil {
-		return nil, errors.Errorf("while parsing CA key: %w", err)
+
+	if !c.secretInfo.dontSaveCaKey {
+		keyPem, ok := secret.Data[c.secretInfo.getCAKeyName()]
+		if !ok {
+			return nil, errors.New(fmt.Sprintf("Cert secret is not well-formed, missing %s", c.secretInfo.caKeyName))
+		}
+		key, _, err := decoder.DecodePemPrivateKey(keyPem)
+		if err != nil {
+			return nil, errors.Errorf("while parsing CA key: %w", err)
+		}
+		kp.keyPEM = keyPem
+		kp.key = key
 	}
-	return &KeyPairArtifacts{
-		Cert:    caCert,
-		CertPEM: caPem,
-		KeyPEM:  keyPem,
-		Key:     key,
-	}, nil
+	return kp, nil
 }
 
-func (c *CertManager) createCACert(begin, end time.Time) (*KeyPairArtifacts, error) {
-	templ := &x509.Certificate{
-		SerialNumber: big.NewInt(0),
-		Subject: pkix.Name{
-			CommonName:   c.certOpt.CAName,
-			Organization: c.certOpt.CAOrganizations,
-		},
-		DNSNames:              c.certOpt.DNSNames,
-		NotBefore:             begin,
-		NotAfter:              end,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment | x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+func (c *certManager) createCACert(begin, end time.Time) (*keyPairArtifacts, error) {
+	hosts := []string{}
+	hosts = append(hosts, c.certOpt.DNSNames...)
+	hosts = append(hosts, c.certOpt.Hosts...)
+	cert, key, err := certgen.GenCACert(certgen.CertOption{
+		CommonName:    c.certOpt.CAName,
+		Organizations: c.certOpt.CAOrganizations,
+		Hosts:         hosts,
+		NotBefore:     begin,
+		NotAfter:      end,
+		RSAKeySize:    2048,
+	})
 	if err != nil {
-		return nil, errors.Errorf("generating key: %w", err)
+		return nil, errors.Errorf("generating cert: %w", err)
 	}
-	der, err := x509.CreateCertificate(rand.Reader, templ, templ, key.Public(), key)
-	if err != nil {
-		return nil, errors.Errorf("creating certificate: %w", err)
-	}
-	certPEM, keyPEM, err := pemEncode(der, key)
+	certPem, err := encoder.PemEncodeCert(cert)
 	if err != nil {
 		return nil, errors.Errorf("encoding PEM: %w", err)
 	}
-	cert, err := x509.ParseCertificate(der)
+	keyPem, err := encoder.PemEncodePrivateKey(key)
 	if err != nil {
-		return nil, errors.Errorf("parsing certificate: %w", err)
+		return nil, errors.Errorf("encoding PEM: %w", err)
 	}
-
-	return &KeyPairArtifacts{Cert: cert, Key: key, CertPEM: certPEM, KeyPEM: keyPEM}, nil
+	return &keyPairArtifacts{cert: cert, key: key, certPEM: certPem, keyPEM: keyPem}, nil
 }
 
-func (c *CertManager) createCertPEM(ca *KeyPairArtifacts, begin, end time.Time) ([]byte, []byte, error) {
-	templ := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: c.certOpt.CommonName,
-		},
-		DNSNames:              c.certOpt.DNSNames,
-		NotBefore:             begin,
-		NotAfter:              end,
-		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+func (c *certManager) createCertPEM(ca *keyPairArtifacts, begin, end time.Time) ([]byte, []byte, error) {
+	hosts := []string{}
+	hosts = append(hosts, c.certOpt.DNSNames...)
+	hosts = append(hosts, c.certOpt.Hosts...)
+	cert, key, err := certgen.GenServerCert(certgen.CertOption{
+		CommonName:    c.certOpt.CAName,
+		Organizations: c.certOpt.CAOrganizations,
+		Hosts:         hosts,
+		NotBefore:     begin,
+		NotAfter:      end,
+		RSAKeySize:    2048,
+		ParentCert:    ca.cert,
+		ParentKey:     ca.key,
+	})
 	if err != nil {
-		return nil, nil, errors.Errorf("generating key: %w", err)
+		return nil, nil, errors.Errorf("generating cert: %w", err)
 	}
-	der, err := x509.CreateCertificate(rand.Reader, templ, ca.Cert, key.Public(), ca.Key)
-	if err != nil {
-		return nil, nil, errors.Errorf("creating certificate: %w", err)
-	}
-	certPEM, keyPEM, err := pemEncode(der, key)
+	certPem, err := encoder.PemEncodeCert(cert)
 	if err != nil {
 		return nil, nil, errors.Errorf("encoding PEM: %w", err)
 	}
-	return certPEM, keyPEM, nil
-}
-
-func pemEncode(certificateDER []byte, key *rsa.PrivateKey) ([]byte, []byte, error) {
-	certBuf := &bytes.Buffer{}
-	if err := pem.Encode(certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certificateDER}); err != nil {
-		return nil, nil, errors.Errorf("encoding cert: %w", err)
+	keyPem, err := encoder.PemEncodePrivateKey(key)
+	if err != nil {
+		return nil, nil, errors.Errorf("encoding PEM: %w", err)
 	}
-	keyBuf := &bytes.Buffer{}
-	if err := pem.Encode(keyBuf, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}); err != nil {
-		return nil, nil, errors.Errorf("encoding key: %w", err)
-	}
-	return certBuf.Bytes(), keyBuf.Bytes(), nil
+	return certPem, keyPem, nil
 }
 
 func (s SecretInfo) getCACertName() string {
@@ -259,7 +245,7 @@ func (s SecretInfo) getKeyName() string {
 	return keyName
 }
 
-func mergeCAPemCerts(pemCerts []byte, newPemCerts []byte) (bool, []byte) {
+func mergeCAPemCerts(pemCerts []byte, newPemCerts []byte) (changed bool, certs []byte) {
 	if bytes.Contains(pemCerts, bytes.TrimSpace(newPemCerts)) {
 		return false, pemCerts
 	}
@@ -275,7 +261,9 @@ func mergeCAPemCerts(pemCerts []byte, newPemCerts []byte) (bool, []byte) {
 
 	// new ca then old ca
 	newCerts.Certificate = append(newCerts.Certificate, caCerts.Certificate...)
-	newCerts.Certificate = append(newCerts.Certificate, oldCertBytes)
+	if len(oldCertBytes) > 0 {
+		newCerts.Certificate = append(newCerts.Certificate, oldCertBytes)
+	}
 
 	pemBytes, _ := encodePEMCerts(&newCerts)
 	return true, pemBytes
@@ -283,32 +271,19 @@ func mergeCAPemCerts(pemCerts []byte, newPemCerts []byte) (bool, []byte) {
 
 func decodePEMCerts(pemCerts []byte) *tls.Certificate {
 	var certs tls.Certificate
-	for len(pemCerts) > 0 {
-		var block *pem.Block
-		block, pemCerts = pem.Decode(pemCerts)
-		if block == nil {
-			break
+	cs, err := decoder.DecodePemCerts(pemCerts)
+	if err == nil {
+		for _, c := range cs {
+			certs.Certificate = append(certs.Certificate, c.Raw)
 		}
-		if block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
-			continue
-		}
-
-		certBytes := block.Bytes
-		if _, err := x509.ParseCertificate(certBytes); err != nil {
-			continue
-		}
-		certs.Certificate = append(certs.Certificate, certBytes)
 	}
-
 	return &certs
 }
 
 func encodePEMCerts(certs *tls.Certificate) ([]byte, error) {
-	certBuf := &bytes.Buffer{}
-	for _, certBytes := range certs.Certificate {
-		if err := pem.Encode(certBuf, &pem.Block{Type: "CERTIFICATE", Bytes: certBytes}); err != nil {
-			return nil, errors.Errorf("encoding cert: %w", err)
-		}
+	data, err := encoder.PemEncodeRawCerts(certs.Certificate)
+	if err != nil {
+		return nil, errors.Errorf("encoding cert: %w", err)
 	}
-	return certBuf.Bytes(), nil
+	return data, nil
 }
