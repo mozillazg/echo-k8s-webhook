@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	klog "k8s.io/klog/v2"
 )
 
@@ -24,7 +25,7 @@ const (
 	keyName              = "tls.key"
 	caCertName           = "ca.crt"
 	caKeyName            = "ca.key"
-	certValidityDuration = time.Hour * 24 * 365 * 10 // 10 years
+	certValidityDuration = time.Hour * 24 * 365 * 100 // 100 years
 )
 
 type keyPairArtifacts struct {
@@ -60,12 +61,16 @@ type secretInterface interface {
 }
 
 func (c *certManager) ensureSecret(ctx context.Context) (*corev1.Secret, error) {
-	secret, err := c.ensureSecretWithoutRetry(ctx)
-	if err != nil {
-		if apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) || apierrors.IsConflict(err) {
-			return c.ensureSecretWithoutRetry(ctx)
-		}
-	}
+	var secret *corev1.Secret
+	var err error
+
+	retry.OnError(retry.DefaultBackoff, func(err error) bool {
+		return err != nil
+	}, func() error {
+		secret, err = c.ensureSecretWithoutRetry(ctx)
+		return err
+	})
+
 	return secret, err
 }
 

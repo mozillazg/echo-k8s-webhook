@@ -11,6 +11,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/util/retry"
 	klog "k8s.io/klog/v2"
 )
 
@@ -28,14 +29,37 @@ type WebhookInfo struct {
 	Name string
 }
 
+type resourceClientGetter func(resource schema.GroupVersionResource) resourceInterface
+
+type resourceInterface interface {
+	Get(ctx context.Context, name string, options metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error)
+	Update(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions, subresources ...string) (*unstructured.Unstructured, error)
+}
+
 type webhookManager struct {
-	webhooks []WebhookInfo
-	dyclient dynamic.Interface
+	webhooks             []WebhookInfo
+	resourceClientGetter resourceClientGetter
+}
+
+func newWebhookManager(webhooks []WebhookInfo, dyclient dynamic.Interface) *webhookManager {
+	return &webhookManager{
+		webhooks: webhooks,
+		resourceClientGetter: func(resource schema.GroupVersionResource) resourceInterface {
+			return dyclient.Resource(resource)
+		},
+	}
 }
 
 func (w *webhookManager) ensureCA(ctx context.Context, caPem []byte) error {
 	for _, info := range w.webhooks {
-		if err := w.ensureWebhookCA(ctx, info, caPem); err != nil {
+
+		err := retry.OnError(retry.DefaultBackoff, func(err error) bool {
+			return err != nil
+		}, func() error {
+			return w.ensureWebhookCA(ctx, info, caPem)
+		})
+
+		if err != nil {
 			return errors.Errorf("ensure ca for webhook %s: %w", info.Name, err)
 		}
 	}
@@ -47,7 +71,7 @@ func (w *webhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, 
 	if err != nil {
 		return errors.Errorf(": %w", err)
 	}
-	client := w.dyclient.Resource(*gvs)
+	client := w.resourceClientGetter(*gvs)
 	obj, err := client.Get(ctx, info.Name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -66,6 +90,10 @@ func (w *webhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, 
 		return nil
 	}
 	if _, err := client.Update(ctx, obj, metav1.UpdateOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			klog.Warningf("webhook %s is not found skip ensure ca", info.Name)
+			return nil
+		}
 		return errors.Errorf("ensure ca for webhook %s: %w", info.Name, err)
 	}
 	return nil

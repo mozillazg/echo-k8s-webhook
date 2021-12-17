@@ -40,10 +40,7 @@ func NewWebhookCert(certOpt CertOption, webhooks []WebhookInfo, kubeclient kuber
 			certOpt:      certOpt,
 			secretClient: kubeclient.CoreV1().Secrets(certOpt.SecretInfo.Namespace),
 		},
-		webhookmanager: &webhookManager{
-			webhooks: webhooks,
-			dyclient: dyclient,
-		},
+		webhookmanager: newWebhookManager(webhooks, dyclient),
 	}
 }
 
