@@ -31,12 +31,14 @@ build-push-image: build-image
 .PHONY: integration-test
 integration-test: kind-test-cluster kind-run
 
+.PHONY: kind-test-cluster
 kind-test-cluster:
 	@if [ -z $$(kind get clusters | grep $(KIND_PROFILE)) ]; then\
 		echo "Could not find $(KIND_PROFILE) cluster. Creating...";\
 		kind create cluster --name $(KIND_PROFILE) --image $(KIND_IMAGE) --wait 5m;\
 	fi
 
+.PHONY: kind-run
 kind-run: build-image
 	kind load docker-image $(IMAGE):$(TAG) --name $(KIND_PROFILE)
 	-kubectl delete -f deploy/echo-k8s-webhook.yaml
