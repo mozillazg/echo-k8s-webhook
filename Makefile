@@ -46,7 +46,7 @@ kind-run: build-image
 
 	kubectl wait --for=condition=Available -n echo-k8s-webhook deployment/echo-k8s-webhook --timeout=3m
 	sleep 10
-	kubectl -n echo-k8s-webhook run --generator=run-pod/v1 test --image=busybox -l echo-k8s-webhook-enabled=true
+	kubectl -n echo-k8s-webhook run --image=busybox -l echo-k8s-webhook-enabled=true
 	sleep 5
 	kubectl -n echo-k8s-webhook logs -l app=echo-k8s-webhook \
 	|grep CREATE | grep Pod |grep '"test"'

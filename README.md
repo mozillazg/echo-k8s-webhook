@@ -9,7 +9,7 @@ $ kubectl apply -f deploy/echo-k8s-webhook.yaml
 
 
 # create object with label `echo-k8s-webhook-enabled=true`
-$ kubectl -n echo-k8s-webhook run --generator=run-pod/v1 test --image=busybox -l echo-k8s-webhook-enabled=true
+$ kubectl -n echo-k8s-webhook run test --image=busybox -l echo-k8s-webhook-enabled=true
 pod/test created
 
 $ kubectl -n echo-k8s-webhook logs -l app=echo-k8s-webhook |grep CREATE | grep Pod |grep '"test"' |tail -n 1 | jq -r .request | base64 --decode |jq
