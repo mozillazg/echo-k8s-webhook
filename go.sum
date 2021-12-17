@@ -284,8 +284,8 @@ github.com/modern-go/reflect2 v1.0.1 h1:9f412s+6RmYXLWZSEzVVgPGK7C2PphHj5RJrvfx9
 github.com/modern-go/reflect2 v1.0.1/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
 github.com/mozillazg/pkiutil v0.2.0 h1:2UGPD7bFydJSRUuuQ8tgweUeF64P+GNbBx63VUPDkXU=
 github.com/mozillazg/pkiutil v0.2.0/go.mod h1:EPtqYuvZ5IXBVj1ttR+L6ejDd8AqpdNhphkJQZXFPsA=
-github.com/mozillazg/webhookcert v0.2.1-0.20211217090529-16a13aa288df h1:8WsgPq/EENiaaxF1JoOhgns3Rv1P6H/sP3NwzUxjZwY=
-github.com/mozillazg/webhookcert v0.2.1-0.20211217090529-16a13aa288df/go.mod h1:PYoNMvhfakcSv1SO9Xy0BZGywVyqNZgiXvCOj13+SqM=
+github.com/mozillazg/webhookcert v0.3.0 h1:JE08mwF/Prki2xw8GLuDfwP6G0pG/WAfezMod0tAa8M=
+github.com/mozillazg/webhookcert v0.3.0/go.mod h1:PYoNMvhfakcSv1SO9Xy0BZGywVyqNZgiXvCOj13+SqM=
 github.com/munnerz/goautoneg v0.0.0-20120707110453-a547fc61f48d/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/mwitkow/go-conntrack v0.0.0-20161129095857-cc309e4a2223/go.mod h1:qRWi+5nqEBWmkhHvq77mSJWrCKwh8bxhgT7d/eI7P4U=

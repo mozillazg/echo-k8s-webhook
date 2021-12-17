@@ -52,7 +52,7 @@ github.com/modern-go/reflect2
 github.com/mozillazg/pkiutil/pkg/decoder
 github.com/mozillazg/pkiutil/pkg/encoder
 github.com/mozillazg/pkiutil/pkg/generator
-# github.com/mozillazg/webhookcert v0.2.1-0.20211217090529-16a13aa288df
+# github.com/mozillazg/webhookcert v0.3.0
 ## explicit
 github.com/mozillazg/webhookcert/pkg/cert
 # github.com/pkg/errors v0.9.1
