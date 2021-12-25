@@ -9,7 +9,9 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/util/retry"
 	klog "k8s.io/klog/v2"
@@ -34,6 +36,7 @@ type resourceClientGetter func(resource schema.GroupVersionResource) resourceInt
 type resourceInterface interface {
 	Get(ctx context.Context, name string, options metav1.GetOptions, subresources ...string) (*unstructured.Unstructured, error)
 	Update(ctx context.Context, obj *unstructured.Unstructured, options metav1.UpdateOptions, subresources ...string) (*unstructured.Unstructured, error)
+	Watch(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error)
 }
 
 type webhookManager struct {
@@ -96,6 +99,66 @@ func (w *webhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, 
 		}
 		return errors.Errorf("ensure ca for webhook %s: %w", info.Name, err)
 	}
+	return nil
+}
+
+func (w *webhookManager) watchChanges(ctx context.Context, events chan<- watch.Event) error {
+	var watchInterfaces []watch.Interface
+	for _, info := range w.webhooks {
+		gvs, err := info.Type.gvr()
+		if err != nil {
+			return errors.Errorf(": %w", err)
+		}
+		nameSelector := fields.OneTermEqualSelector("metadata.name", info.Name).String()
+		client := w.resourceClientGetter(*gvs)
+		ts := int64(60 * 60 * 23) // 23 hours
+		watchInter, err := client.Watch(ctx, metav1.ListOptions{
+			FieldSelector:  nameSelector,
+			Watch:          true,
+			TimeoutSeconds: &ts,
+		})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return errors.Errorf("watch %s: %w", info.Name, err)
+		}
+		watchInterfaces = append(watchInterfaces, watchInter)
+	}
+	if len(watchInterfaces) == 0 {
+		return nil
+	}
+
+	go func() {
+		var err watch.Event
+	loop:
+		for {
+			select {
+			case <-ctx.Done():
+				break loop
+			default:
+			}
+			for _, w := range watchInterfaces {
+				select {
+				case e := <-w.ResultChan():
+					if e.Type == watch.Error {
+						err = e
+						break loop
+					} else {
+						events <- e
+					}
+				default:
+				}
+			}
+		}
+		for _, w := range watchInterfaces {
+			w.Stop()
+		}
+		if err.Type == watch.Error {
+			events <- err
+		}
+	}()
+
 	return nil
 }
 

@@ -16,6 +16,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	klog "k8s.io/klog/v2"
 )
@@ -26,6 +27,7 @@ const (
 	caCertName           = "ca.crt"
 	caKeyName            = "ca.key"
 	certValidityDuration = time.Hour * 24 * 365 * 100 // 100 years
+	rsaKeySize           = 2048
 )
 
 type keyPairArtifacts struct {
@@ -89,8 +91,9 @@ func (c *certManager) ensureSecretWithoutRetry(ctx context.Context) (*corev1.Sec
 		}
 		return client.Create(ctx, newSecret, metav1.CreateOptions{})
 	}
-	_, err = c.buildArtifactsFromSecret(secret)
-	if err != nil {
+
+	checkNotAfter := time.Now().Add(-wait.Jitter(time.Hour*24*7, 0.5))
+	if err := c.certSecretIsValid(secret, time.Now(), checkNotAfter); err != nil {
 		klog.Warningf("parse cert from secret %s failed, will update exist secret: %s", name, err)
 		newSecret, err := c.newSecret()
 		if err != nil {
@@ -168,17 +171,45 @@ func (c *certManager) buildArtifactsFromSecret(secret *corev1.Secret) (*keyPairA
 	return kp, nil
 }
 
+func (c *certManager) certSecretIsValid(secret *corev1.Secret, now, notAfter time.Time) error {
+	ca, err := c.buildArtifactsFromSecret(secret)
+	if err != nil {
+		return err
+	}
+	caCert := ca.cert
+	serverPem, ok := secret.Data[c.secretInfo.getCertName()]
+	if !ok {
+		return errors.New(fmt.Sprintf("Cert secret is not well-formed, missing %s", c.secretInfo.caCertName))
+	}
+	serverKey, ok := secret.Data[c.secretInfo.getKeyName()]
+	if !ok {
+		return errors.New(fmt.Sprintf("Cert secret is not well-formed, missing %s", c.secretInfo.caCertName))
+	}
+	serverCert, _, err := decoder.DecodePemCert(serverPem)
+	if err != nil {
+		return errors.Errorf("while parsing server cert: %w", err)
+	}
+	if _, _, err := decoder.DecodePemPrivateKey(serverKey); err != nil {
+		return errors.Errorf("while parsing server key: %w", err)
+	}
+
+	if err := certIsValid(caCert, now, notAfter); err != nil {
+		return err
+	}
+	if err := certIsValid(serverCert, now, notAfter); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (c *certManager) createCACert(begin, end time.Time) (*keyPairArtifacts, error) {
-	hosts := []string{}
-	hosts = append(hosts, c.certOpt.DNSNames...)
-	hosts = append(hosts, c.certOpt.Hosts...)
 	cert, key, err := certgen.GenCACert(certgen.CertOption{
 		CommonName:    c.certOpt.CAName,
-		Organizations: c.certOpt.CAOrganizations,
-		Hosts:         hosts,
+		Organizations: c.certOpt.getOrganizations(),
 		NotBefore:     begin,
 		NotAfter:      end,
-		RSAKeySize:    2048,
+		RSAKeySize:    c.certOpt.getRSAKeySize(),
 	})
 	if err != nil {
 		return nil, errors.Errorf("generating cert: %w", err)
@@ -195,16 +226,13 @@ func (c *certManager) createCACert(begin, end time.Time) (*keyPairArtifacts, err
 }
 
 func (c *certManager) createCertPEM(ca *keyPairArtifacts, begin, end time.Time) ([]byte, []byte, error) {
-	hosts := []string{}
-	hosts = append(hosts, c.certOpt.DNSNames...)
-	hosts = append(hosts, c.certOpt.Hosts...)
 	cert, key, err := certgen.GenServerCert(certgen.CertOption{
-		CommonName:    c.certOpt.CAName,
-		Organizations: c.certOpt.CAOrganizations,
-		Hosts:         hosts,
+		CommonName:    c.certOpt.CommonName,
+		Organizations: c.certOpt.getOrganizations(),
+		Hosts:         c.certOpt.getHots(),
 		NotBefore:     begin,
 		NotAfter:      end,
-		RSAKeySize:    2048,
+		RSAKeySize:    c.certOpt.getRSAKeySize(),
 		ParentCert:    ca.cert,
 		ParentKey:     ca.key,
 	})
@@ -291,4 +319,27 @@ func encodePEMCerts(certs *tls.Certificate) ([]byte, error) {
 		return nil, errors.Errorf("encoding cert: %w", err)
 	}
 	return data, nil
+}
+
+func certIsValid(c *x509.Certificate, now, notAfter time.Time) error {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if notAfter.IsZero() {
+		notAfter = time.Now()
+	}
+	if now.Before(c.NotBefore) {
+		return x509.CertificateInvalidError{
+			Cert:   c,
+			Reason: x509.Expired,
+			Detail: fmt.Sprintf("current time %s is before %s", now.Format(time.RFC3339), c.NotBefore.Format(time.RFC3339)),
+		}
+	} else if notAfter.After(c.NotAfter) {
+		return x509.CertificateInvalidError{
+			Cert:   c,
+			Reason: x509.Expired,
+			Detail: fmt.Sprintf("not after time %s is after %s", notAfter.Format(time.RFC3339), c.NotAfter.Format(time.RFC3339)),
+		}
+	}
+	return nil
 }

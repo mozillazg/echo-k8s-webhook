@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"time"
 
@@ -12,7 +14,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -66,14 +67,13 @@ func main() {
 	}
 
 	setupFinished := make(chan struct{})
+	webhookReady := make(chan struct{})
 	entryLog.Info("setting up cert")
-	ensureCertReady(dnsName, setupFinished, time.Minute)
-
-	_ = mgr.AddHealthzCheck("default", healthz.Ping)
-	_ = mgr.AddReadyzCheck("default", healthz.Ping)
+	webhookcert := ensureCertReady(dnsName, setupFinished, time.Minute*3)
+	setupHealthzAndReadyz(mgr, webhookcert, webhookReady)
 
 	entryLog.Info("setting up webhook server")
-	go setupControllers(mgr, setupFinished)
+	go setupControllers(mgr, setupFinished, webhookReady)
 
 	entryLog.Info("starting manager")
 	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
@@ -82,7 +82,7 @@ func main() {
 	}
 }
 
-func ensureCertReady(dnsName string, setupFinished chan struct{}, timeout time.Duration) {
+func ensureCertReady(dnsName string, setupFinished chan struct{}, timeout time.Duration) *cert.WebhookCert {
 	kubeclient := kubernetes.NewForConfigOrDie(config.GetConfigOrDie())
 	dyclient := dynamic.NewForConfigOrDie(config.GetConfigOrDie())
 	webhooks := []cert.WebhookInfo{
@@ -92,32 +92,66 @@ func ensureCertReady(dnsName string, setupFinished chan struct{}, timeout time.D
 		},
 	}
 	webhookcert := cert.NewWebhookCert(cert.CertOption{
-		CAName:          caName,
-		CAOrganizations: []string{caOrganization},
-		DNSNames:        []string{dnsName},
-		CommonName:      dnsName,
-		CertDir:         *certDir,
+		CAName:        caName,
+		Organizations: []string{caOrganization},
+		Hosts:         []string{dnsName},
+		CommonName:    dnsName,
+		CertDir:       *certDir,
 		SecretInfo: cert.SecretInfo{
 			Name:      secretName,
 			Namespace: *namespace,
 		},
 	}, webhooks, kubeclient, dyclient)
 
+	ctx := context.Background()
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
-		err := webhookcert.EnsureCertReady(ctx)
-		if err != nil {
+		if err := webhookcert.EnsureCertReady(ctxWithTimeout); err != nil {
 			klog.Fatalf("ensure cert ready failed: %+v", err)
 		}
 		close(setupFinished)
+		if err := webhookcert.WatchAndEnsureWebhooksCA(ctx); err != nil {
+			klog.Fatalf("watch webhooks failed: %+v", err)
+		}
 	}()
+
+	return webhookcert
 }
 
-func setupControllers(mgr manager.Manager, setupFinished chan struct{}) {
+func setupControllers(mgr manager.Manager, setupFinished, webhookReady chan struct{}) {
 	<-setupFinished
+
 	entryLog.Info("registering webhook to the webhook server")
 	hookServer := mgr.GetWebhookServer()
 	handler := pkgwebhook.NewEchoWebhook(mgr.GetClient(), pkgwebhook.NewLogRecorder())
 	hookServer.Register("/webhook", &webhook.Admission{Handler: handler})
+
+	close(webhookReady)
+}
+
+func setupHealthzAndReadyz(mgr manager.Manager, webhookcert *cert.WebhookCert, webhookReady chan struct{}) {
+	_ = mgr.AddHealthzCheck("default", func(_ *http.Request) error {
+		select {
+		case <-webhookReady:
+		default:
+			return nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		defer cancel()
+		err := webhookcert.CheckServerCertValid(ctx, fmt.Sprintf("https://127.0.0.1:%d", *port))
+		if err != nil {
+			entryLog.Error(err, "check server cert failed")
+		}
+		return err
+	})
+
+	_ = mgr.AddReadyzCheck("default", func(_ *http.Request) error {
+		select {
+		case <-webhookReady:
+			return nil
+		default:
+			return errors.New("webhook is not ready")
+		}
+	})
 }

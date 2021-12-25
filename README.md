@@ -12,7 +12,8 @@ $ kubectl apply -f deploy/echo-k8s-webhook.yaml
 $ kubectl -n echo-k8s-webhook run test --image=busybox -l echo-k8s-webhook-enabled=true
 pod/test created
 
-$ kubectl -n echo-k8s-webhook logs -l app=echo-k8s-webhook |grep CREATE | grep Pod |grep '"test"' |tail -n 1 | jq -r .request | base64 --decode |jq
+$ kubectl -n echo-k8s-webhook logs $(kubectl -n echo-k8s-webhook get pod -o name |grep echo-k8s-webhook) \
+    |grep CREATE | grep Pod |grep '"test' |tail -n 1 | jq -r .request | base64 --decode |jq
 
 {
   "uid": "6e0c80e3-34f9-4ff4-8be0-6bd847574d10",
