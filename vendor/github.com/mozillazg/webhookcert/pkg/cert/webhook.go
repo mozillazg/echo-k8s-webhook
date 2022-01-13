@@ -129,37 +129,39 @@ func (w *webhookManager) watchChanges(ctx context.Context, events chan<- watch.E
 		return nil
 	}
 
-	go func() {
-		var err watch.Event
-	loop:
-		for {
-			select {
-			case <-ctx.Done():
-				break loop
-			default:
-			}
-			for _, w := range watchInterfaces {
-				select {
-				case e := <-w.ResultChan():
-					if e.Type == watch.Error {
-						err = e
-						break loop
-					} else {
-						events <- e
-					}
-				default:
-				}
-			}
-		}
-		for _, w := range watchInterfaces {
-			w.Stop()
-		}
-		if err.Type == watch.Error {
-			events <- err
-		}
-	}()
+	for _, intf := range watchInterfaces {
+		intf := intf
+		go func(intf watch.Interface) {
+			w.watchInterfaceChanges(ctx, events, intf)
+		}(intf)
+	}
 
 	return nil
+}
+func (w *webhookManager) watchInterfaceChanges(ctx context.Context, events chan<- watch.Event, intf watch.Interface) {
+	var err watch.Event
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			break loop
+		default:
+		}
+		select {
+		case e := <-intf.ResultChan():
+			if e.Type == watch.Error {
+				err = e
+				break loop
+			} else {
+				events <- e
+			}
+		}
+	}
+
+	intf.Stop()
+	if err.Type == watch.Error {
+		events <- err
+	}
 }
 
 func (t WebhookType) gvr() (*schema.GroupVersionResource, error) {
