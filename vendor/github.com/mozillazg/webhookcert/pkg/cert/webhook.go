@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"time"
 
 	errors "golang.org/x/xerrors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -102,44 +103,31 @@ func (w *webhookManager) ensureWebhookCA(ctx context.Context, info WebhookInfo, 
 	return nil
 }
 
-func (w *webhookManager) watchChanges(ctx context.Context, events chan<- watch.Event) error {
-	var watchInterfaces []watch.Interface
-	for _, info := range w.webhooks {
-		gvs, err := info.Type.gvr()
-		if err != nil {
-			return errors.Errorf(": %w", err)
-		}
-		nameSelector := fields.OneTermEqualSelector("metadata.name", info.Name).String()
-		client := w.resourceClientGetter(*gvs)
-		ts := int64(60 * 60 * 23) // 23 hours
-		watchInter, err := client.Watch(ctx, metav1.ListOptions{
-			FieldSelector:  nameSelector,
-			Watch:          true,
-			TimeoutSeconds: &ts,
-		})
-		if err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return errors.Errorf("watch %s: %w", info.Name, err)
-		}
-		watchInterfaces = append(watchInterfaces, watchInter)
+func (w *webhookManager) watchChanges(ctx context.Context, events chan<- watch.Event, webhook WebhookInfo, watchTimeout time.Duration) error {
+	gvs, err := webhook.Type.gvr()
+	if err != nil {
+		return errors.Errorf(": %w", err)
 	}
-	if len(watchInterfaces) == 0 {
-		return nil
+	nameSelector := fields.OneTermEqualSelector("metadata.name", webhook.Name).String()
+	client := w.resourceClientGetter(*gvs)
+	ts := int64(watchTimeout / time.Second)
+	watcher, err := client.Watch(ctx, metav1.ListOptions{
+		FieldSelector:  nameSelector,
+		Watch:          true,
+		TimeoutSeconds: &ts,
+	})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return err
+		}
+		return errors.Errorf("watch %s: %w", webhook.Name, err)
 	}
 
-	for _, intf := range watchInterfaces {
-		intf := intf
-		go func(intf watch.Interface) {
-			w.watchInterfaceChanges(ctx, events, intf)
-		}(intf)
-	}
+	w.watchInterfaceChanges(ctx, events, watcher)
 
 	return nil
 }
 func (w *webhookManager) watchInterfaceChanges(ctx context.Context, events chan<- watch.Event, intf watch.Interface) {
-	var err watch.Event
 loop:
 	for {
 		select {
@@ -147,10 +135,15 @@ loop:
 			break loop
 		default:
 		}
+
 		select {
-		case e := <-intf.ResultChan():
+		case e, ok := <-intf.ResultChan():
+			if !ok {
+				klog.Warningf("watch is gone")
+				break loop
+			}
 			if e.Type == watch.Error {
-				err = e
+				klog.Warningf("watch got error, err: %+s", e.Object)
 				break loop
 			} else {
 				events <- e
@@ -159,9 +152,6 @@ loop:
 	}
 
 	intf.Stop()
-	if err.Type == watch.Error {
-		events <- err
-	}
 }
 
 func (t WebhookType) gvr() (*schema.GroupVersionResource, error) {

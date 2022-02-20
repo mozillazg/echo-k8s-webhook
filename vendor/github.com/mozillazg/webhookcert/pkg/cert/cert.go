@@ -12,6 +12,7 @@ import (
 	"time"
 
 	errors "golang.org/x/xerrors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
@@ -84,37 +85,41 @@ func (w *WebhookCert) EnsureCertReady(ctx context.Context) error {
 
 func (w *WebhookCert) WatchAndEnsureWebhooksCA(ctx context.Context) error {
 	events := make(chan watch.Event)
-	err := w.webhookmanager.watchChanges(ctx, events)
-	if err != nil {
-		return err
+	watchTimeout := time.Hour * 23
+	if os.Getenv("WEBHOOKCERT_DEBUG_WATCH") == "true" {
+		watchTimeout = time.Minute * 15
 	}
 
-	wait.JitterUntilWithContext(ctx, func(_ context.Context) {
-	loop:
-		for {
-			select {
-			case e := <-events:
-				if e.Type == watch.Error {
-					klog.Warningf("watch error will retry: %+v", e)
-					break loop
-				}
-				if e.Type == watch.Added || e.Type == watch.Modified {
-					if err := w.ensureCAWhenWebhookChange(ctx); err != nil {
-						klog.Errorf("ensure webhook ca failed: %+v", err)
+	for _, info := range w.webhookmanager.webhooks {
+		info := info
+		go func(info WebhookInfo) {
+			wait.JitterUntilWithContext(ctx, func(_ context.Context) {
+				timeout := wait.Jitter(watchTimeout, 0.1)
+				err := w.webhookmanager.watchChanges(ctx, events, info, timeout)
+				if err != nil {
+					if apierrors.IsNotFound(err) {
+						klog.Warningf("webhook %s is not found, delay watch", info.Name)
+						time.Sleep(wait.Jitter(time.Hour*24, 0.1))
+						return
 					}
+					klog.Errorf("watch webhook changes failed: %+v", err)
 				}
-			case <-ctx.Done():
-				return
+			}, time.Minute, 5.0, true)
+		}(info)
+	}
+
+	for {
+		select {
+		case e := <-events:
+			if e.Type == watch.Added || e.Type == watch.Modified {
+				if err := w.ensureCAWhenWebhookChange(ctx); err != nil {
+					klog.Errorf("ensure webhook ca failed: %+v", err)
+				}
 			}
+		case <-ctx.Done():
+			return nil
 		}
-
-		err := w.webhookmanager.watchChanges(ctx, events)
-		if err != nil {
-			klog.Errorf("watch webhook changes failed: %+v", err)
-		}
-	}, time.Minute, 5.0, true)
-
-	return nil
+	}
 }
 
 func (w *WebhookCert) ensureCAWhenWebhookChange(ctx context.Context) error {
