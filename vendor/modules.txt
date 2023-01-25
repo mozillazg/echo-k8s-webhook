@@ -52,9 +52,12 @@ github.com/modern-go/reflect2
 github.com/mozillazg/pkiutil/pkg/decoder
 github.com/mozillazg/pkiutil/pkg/encoder
 github.com/mozillazg/pkiutil/pkg/generator
-# github.com/mozillazg/webhookcert v0.4.3
+# github.com/mozillazg/webhookcert v0.5.0
 ## explicit
 github.com/mozillazg/webhookcert/pkg/cert
+# github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.0.0-20230125120428-d24c16948ad3
+## explicit
+github.com/mozillazg/webhookcert/pkg/ctlrhelper
 # github.com/pkg/errors v0.9.1
 github.com/pkg/errors
 # github.com/prometheus/client_golang v1.11.0

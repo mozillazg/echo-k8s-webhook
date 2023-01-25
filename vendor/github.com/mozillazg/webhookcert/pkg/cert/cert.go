@@ -129,6 +129,35 @@ func (w *WebhookCert) ensureCAWhenWebhookChange(ctx context.Context) error {
 	return nil
 }
 
+func (w *WebhookCert) CheckServerStartedWithTimeout(addr string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+	return w.CheckServerStarted(ctx, addr)
+}
+
+func (w *WebhookCert) CheckServerStarted(ctx context.Context, addr string) error {
+	config := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	d := &tls.Dialer{Config: config}
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return errors.Errorf("webhook server is not reachable: %w", err)
+	}
+
+	if err := conn.Close(); err != nil {
+		return errors.Errorf("webhook server is not reachable: closing connection: %w", err)
+	}
+
+	return nil
+}
+
+func (w *WebhookCert) CheckServerCertValidWithTimeout(addr string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.TODO(), timeout)
+	defer cancel()
+	return w.CheckServerCertValid(ctx, addr)
+}
+
 func (w *WebhookCert) CheckServerCertValid(ctx context.Context, addr string) error {
 	url := addr
 	if !strings.HasPrefix(url, "https://") {
