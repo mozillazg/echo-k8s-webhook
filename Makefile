@@ -43,8 +43,8 @@ kind-run: build-image
 	kind load docker-image $(IMAGE):$(TAG) --name $(KIND_PROFILE)
 	-kubectl delete -f deploy/echo-k8s-webhook.yaml
 
-	cat deploy/echo-k8s-webhook.yaml |sed s"#image: mozillazg/echo-k8s-webhook:.*#image: $(IMAGE):$(TAG)#" | \
-	sed s'/imagePullPolicy: Always//' | kubectl apply -f -
+	cat deploy/echo-k8s-webhook.yaml |sed s"#image: mozillazg/echo-k8s-webhook:.*#image: $(IMAGE):$(TAG)#g" | \
+	sed s'/imagePullPolicy: Always//g' | kubectl apply -f -
 
 	kubectl wait --for=condition=Available -n echo-k8s-webhook deployment/echo-k8s-webhook --timeout=3m
 	sleep 10

@@ -97,11 +97,30 @@ func NewWebhookHelperOrDie(opt Option) *WebhookHelper {
 	return w
 }
 
+// Setup is a non-block method
+// * ensure cert exist and mounted
+// * setup healthz and readyz
+// * registry webhooks
 func (w *WebhookHelper) Setup(ctx context.Context, mgr manager.Manager, registry func(*webhook.Server), errC chan<- error) {
 	webhookcert := w.ensureCertReady(ctx, errC)
 	w.setupHealthzAndReadyz(mgr, webhookcert)
 	go w.setupControllers(mgr, webhookcert, registry)
 	return
+}
+
+// EnsureCertReady ensure cert exist and mounted
+// it will block util successes or failed
+func (w *WebhookHelper) EnsureCertReady(ctx context.Context) error {
+	errC := make(chan error, 1)
+	w.ensureCertReady(ctx, errC)
+	select {
+	case <-w.ensureCertFinished:
+		return nil
+	case err := <-errC:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (w *WebhookHelper) ensureCertReady(ctx context.Context, errC chan<- error) *cert.WebhookCert {

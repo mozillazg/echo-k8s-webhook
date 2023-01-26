@@ -286,8 +286,8 @@ github.com/mozillazg/pkiutil v0.2.0 h1:2UGPD7bFydJSRUuuQ8tgweUeF64P+GNbBx63VUPDk
 github.com/mozillazg/pkiutil v0.2.0/go.mod h1:EPtqYuvZ5IXBVj1ttR+L6ejDd8AqpdNhphkJQZXFPsA=
 github.com/mozillazg/webhookcert v0.5.1 h1:tzJVqXDg9unyhwDbYgrX01GmaYIDbwryCe67XazilQc=
 github.com/mozillazg/webhookcert v0.5.1/go.mod h1:PYoNMvhfakcSv1SO9Xy0BZGywVyqNZgiXvCOj13+SqM=
-github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.1.0 h1:+GHMDmAGBU2piO1j3vyTF1Oxfa4R5vFH9Utm9IcaHVM=
-github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.1.0/go.mod h1:dHqCbdURTM5FefHrruBBqXZfMnQj41gYUSFe/lb0GHI=
+github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.2.0 h1:zfGh5MQNsNi/AuyKvM2+5FIc4mj9wlLujTTCQIa+ImU=
+github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.2.0/go.mod h1:dHqCbdURTM5FefHrruBBqXZfMnQj41gYUSFe/lb0GHI=
 github.com/munnerz/goautoneg v0.0.0-20120707110453-a547fc61f48d/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/mwitkow/go-conntrack v0.0.0-20161129095857-cc309e4a2223/go.mod h1:qRWi+5nqEBWmkhHvq77mSJWrCKwh8bxhgT7d/eI7P4U=

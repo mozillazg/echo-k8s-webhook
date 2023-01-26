@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"github.com/mozillazg/webhookcert/pkg/cert"
 	"github.com/mozillazg/webhookcert/pkg/ctlrhelper"
@@ -29,6 +30,9 @@ var (
 	port       = flag.Int("port", webhook.DefaultPort, "port for the server")
 	certDir    = flag.String("cert-dir", "/certs", "The directory where certs are stored")
 	namespace  = flag.String("namespace", "", "namespace of pod")
+
+	// use-cases: ensure cert via init container
+	onlyEnsureCert = flag.Bool("only-ensure-cert", false, "ensure cert then exit")
 )
 
 func init() {
@@ -62,6 +66,7 @@ func main() {
 	errC := make(chan error, 2)
 
 	setupWebhook(ctx, mgr, errC)
+
 	go func() {
 		entryLog.Info("starting manager")
 		if err := mgr.Start(ctx); err != nil {
@@ -91,6 +96,10 @@ func setupWebhook(ctx context.Context, mgr manager.Manager, errC chan<- error) {
 		},
 		WebhookServerPort: *port,
 	}
+	if *onlyEnsureCert {
+		ensureCertThenExit(ctx, opt)
+	}
+
 	h, err := ctlrhelper.NewNewWebhookHelper(opt)
 	if err != nil {
 		entryLog.Error(err, "unable creates a new WebhookHelper")
@@ -102,4 +111,23 @@ func setupWebhook(ctx context.Context, mgr manager.Manager, errC chan<- error) {
 	h.Setup(ctx, mgr, func(s *webhook.Server) {
 		s.Register("/webhook", &webhook.Admission{Handler: handler})
 	}, errC)
+}
+
+func ensureCertThenExit(ctx context.Context, opt ctlrhelper.Option) {
+	entryLog.Info("will ensure cert then exist")
+	h, err := ctlrhelper.NewNewWebhookHelper(opt)
+	if err != nil {
+		entryLog.Error(err, "unable creates a new WebhookHelper")
+		os.Exit(1)
+		return
+	}
+
+	newCtx, cancel := context.WithTimeout(ctx, time.Minute*5)
+	defer cancel()
+	if err := h.EnsureCertReady(newCtx); err != nil {
+		entryLog.Error(err, "ensure cert failed")
+		os.Exit(1)
+	}
+	entryLog.Info("ensure cert success")
+	os.Exit(0)
 }
