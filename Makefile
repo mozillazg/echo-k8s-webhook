@@ -46,7 +46,7 @@ kind-run: build-image
 	cat deploy/echo-k8s-webhook.yaml |sed s"#image: mozillazg/echo-k8s-webhook:.*#image: $(IMAGE):$(TAG)#g" | \
 	sed s'/imagePullPolicy: Always//g' | kubectl apply -f -
 
-	kubectl wait --for=condition=Available -n echo-k8s-webhook deployment/echo-k8s-webhook --timeout=3m
+	kubectl wait --for=condition=Available -n echo-k8s-webhook deployment/echo-k8s-webhook --timeout=10m
 	sleep 10
 	kubectl -n echo-k8s-webhook run test --image=busybox -l echo-k8s-webhook-enabled=true
 	sleep 5
