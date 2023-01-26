@@ -2,17 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
-	"fmt"
-	"net/http"
 	"os"
-	"time"
 
 	"github.com/mozillazg/webhookcert/pkg/cert"
 	"github.com/mozillazg/webhookcert/pkg/ctlrhelper"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -25,11 +19,9 @@ import (
 )
 
 const (
-	secretName     = "echo-k8s-webhook-server-cert"
-	serviceName    = "echo-k8s-webhook-service"
-	caName         = "echo-k8s-webhook-ca"
-	caOrganization = "echo-k8s-webhook"
-	vWCName        = "echo-k8s-webhook"
+	secretName  = "echo-k8s-webhook-server-cert"
+	serviceName = "echo-k8s-webhook-service"
+	vWCName     = "echo-k8s-webhook"
 )
 
 var (
@@ -67,16 +59,25 @@ func main() {
 
 	entryLog.Info("setting up webhook")
 	ctx := signals.SetupSignalHandler()
-	setupWebhook(ctx, mgr)
+	errC := make(chan error, 2)
 
-	entryLog.Info("starting manager")
-	if err := mgr.Start(ctx); err != nil {
-		entryLog.Error(err, "unable to run manager")
+	setupWebhook(ctx, mgr, errC)
+	go func() {
+		entryLog.Info("starting manager")
+		if err := mgr.Start(ctx); err != nil {
+			entryLog.Error(err, "unable to run manager")
+			errC <- err
+		}
+	}()
+
+	select {
+	case <-errC:
 		os.Exit(1)
+	case <-ctx.Done():
 	}
 }
 
-func setupWebhook(ctx context.Context, mgr manager.Manager) {
+func setupWebhook(ctx context.Context, mgr manager.Manager, errC chan<- error) {
 	opt := ctlrhelper.Option{
 		Namespace:   *namespace,
 		SecretName:  secretName,
@@ -88,86 +89,17 @@ func setupWebhook(ctx context.Context, mgr manager.Manager) {
 				Name: vWCName,
 			},
 		},
+		WebhookServerPort: *port,
 	}
-	h := ctlrhelper.NewNewWebhookHelperOrDie(opt)
+	h, err := ctlrhelper.NewNewWebhookHelper(opt)
+	if err != nil {
+		entryLog.Error(err, "unable creates a new WebhookHelper")
+		errC <- err
+		return
+	}
 	handler := pkgwebhook.NewEchoWebhook(mgr.GetClient(), pkgwebhook.NewLogRecorder())
 
 	h.Setup(ctx, mgr, func(s *webhook.Server) {
 		s.Register("/webhook", &webhook.Admission{Handler: handler})
-	})
-}
-
-func ensureCertReady(dnsName string, setupFinished chan struct{}, timeout time.Duration) *cert.WebhookCert {
-	kubeclient := kubernetes.NewForConfigOrDie(config.GetConfigOrDie())
-	dyclient := dynamic.NewForConfigOrDie(config.GetConfigOrDie())
-	webhooks := []cert.WebhookInfo{
-		{
-			Type: cert.ValidatingV1,
-			Name: vWCName,
-		},
-	}
-	webhookcert := cert.NewWebhookCert(cert.CertOption{
-		CAName:        caName,
-		Organizations: []string{caOrganization},
-		Hosts:         []string{dnsName},
-		CommonName:    dnsName,
-		CertDir:       *certDir,
-		SecretInfo: cert.SecretInfo{
-			Name:      secretName,
-			Namespace: *namespace,
-		},
-	}, webhooks, kubeclient, dyclient)
-
-	ctx := context.Background()
-	go func() {
-		ctxWithTimeout, cancel := context.WithTimeout(ctx, timeout)
-		defer cancel()
-		if err := webhookcert.EnsureCertReady(ctxWithTimeout); err != nil {
-			klog.Fatalf("ensure cert ready failed: %+v", err)
-		}
-		close(setupFinished)
-		if err := webhookcert.WatchAndEnsureWebhooksCA(ctx); err != nil {
-			klog.Fatalf("watch webhooks failed: %+v", err)
-		}
-	}()
-
-	return webhookcert
-}
-
-func setupControllers(mgr manager.Manager, setupFinished, webhookReady chan struct{}) {
-	<-setupFinished
-
-	entryLog.Info("registering webhook to the webhook server")
-	hookServer := mgr.GetWebhookServer()
-	handler := pkgwebhook.NewEchoWebhook(mgr.GetClient(), pkgwebhook.NewLogRecorder())
-	hookServer.Register("/webhook", &webhook.Admission{Handler: handler})
-
-	close(webhookReady)
-}
-
-func setupHealthzAndReadyz(mgr manager.Manager, webhookcert *cert.WebhookCert, webhookReady chan struct{}) {
-	s := mgr.GetWebhookServer()
-	_ = mgr.AddHealthzCheck("default", func(_ *http.Request) error {
-		select {
-		case <-webhookReady:
-		default:
-			return nil
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-		defer cancel()
-		err := webhookcert.CheckServerCertValid(ctx, fmt.Sprintf("https://127.0.0.1:%d", s.Port))
-		if err != nil {
-			entryLog.Error(err, "check server cert failed")
-		}
-		return err
-	})
-
-	_ = mgr.AddReadyzCheck("default", func(_ *http.Request) error {
-		select {
-		case <-webhookReady:
-			return nil
-		default:
-			return errors.New("webhook is not ready")
-		}
-	})
+	}, errC)
 }

@@ -163,7 +163,7 @@ func (w *WebhookCert) CheckServerCertValid(ctx context.Context, addr string) err
 	if !strings.HasPrefix(url, "https://") {
 		url = fmt.Sprintf("https://%s", url)
 	}
-	req, err := http.NewRequest(http.MethodGet, addr, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return errors.Errorf("init request: %w", err)
 	}

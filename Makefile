@@ -6,12 +6,12 @@ GOOS ?= $(shell go env GOOS)
 GOARCH ?= amd64
 
 GO_LDFLAGS := -extldflags "-static"
-GO_LDFLAGS += -w -s
+#GO_LDFLAGS += -w -s
 
-GO_BUILD_FLAGS := -trimpath
-GO_BUILD_FLAGS += -ldflags '$(GO_LDFLAGS)'
-GO_BUILD_FLAGS += -asmflags "all=-trimpath=${GOPATH}"
-GO_BUILD_FLAGS += -gcflags "all=-trimpath=${GOPATH}"
+#GO_BUILD_FLAGS := -trimpath
+GO_BUILD_FLAGS := -ldflags '$(GO_LDFLAGS)'
+#GO_BUILD_FLAGS += -asmflags "all=-trimpath=${GOPATH}"
+#GO_BUILD_FLAGS += -gcflags "all=-trimpath=${GOPATH}"
 
 KIND_PROFILE ?= echo-k8s-webhook
 KIND_IMAGE ?= kindest/node:v1.21.1

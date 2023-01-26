@@ -142,10 +142,21 @@ spec:
             httpGet:
               path: /healthz
               port: 9090
+            initialDelaySeconds: 5
+            timeoutSeconds: 4
           readinessProbe:
             httpGet:
               path: /readyz
               port: 9090
+            initialDelaySeconds: 5
+            timeoutSeconds: 4
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: 9090
+            failureThreshold: 24
+            periodSeconds: 10
+            timeoutSeconds: 4
           ports:
             - name: webhook
               containerPort: 9443
