@@ -55,7 +55,7 @@ github.com/mozillazg/pkiutil/pkg/generator
 # github.com/mozillazg/webhookcert v0.5.1
 ## explicit
 github.com/mozillazg/webhookcert/pkg/cert
-# github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.3.0-rc.1
+# github.com/mozillazg/webhookcert/pkg/ctlrhelper v0.3.0
 ## explicit
 github.com/mozillazg/webhookcert/pkg/ctlrhelper
 # github.com/pkg/errors v0.9.1
