@@ -47,8 +47,8 @@ type Option struct {
 	TimeoutForCheckServerStarted time.Duration
 	TimeoutForCheckServerCert    time.Duration
 
-	kubeClient    kubernetes.Interface
-	dynamicClient dynamic.Interface
+	KubeClient    kubernetes.Interface
+	DynamicClient dynamic.Interface
 }
 
 type WebhookHelper struct {
@@ -58,7 +58,7 @@ type WebhookHelper struct {
 	webhookReady       chan struct{}
 }
 
-func NewNewWebhookHelper(opt Option) (*WebhookHelper, error) {
+func NewWebhookHelper(opt Option) (*WebhookHelper, error) {
 	err := opt.ValidateAndFillDefaultValues()
 	if err != nil {
 		return nil, err
@@ -70,8 +70,8 @@ func NewNewWebhookHelper(opt Option) (*WebhookHelper, error) {
 	}, nil
 }
 
-func NewNewWebhookHelperOrDie(opt Option) *WebhookHelper {
-	w, err := NewNewWebhookHelper(opt)
+func NewWebhookHelperOrDie(opt Option) *WebhookHelper {
+	w, err := NewWebhookHelper(opt)
 	if err != nil {
 		log.Error(err, "unable creates a new WebhookHelper for the option")
 		os.Exit(1)
@@ -79,22 +79,14 @@ func NewNewWebhookHelperOrDie(opt Option) *WebhookHelper {
 	return w
 }
 
-func NewWebhookHelperOrDie(opt Option) *WebhookHelper {
-	w := &WebhookHelper{
-		opt: opt,
-	}
-	if w.opt.DnsName == "" {
-		dnsName := fmt.Sprintf("%s.%s.svc", opt.ServiceName, opt.Namespace)
-		w.opt.DnsName = dnsName
-	}
-	if w.opt.kubeClient == nil {
-		w.opt.kubeClient = kubernetes.NewForConfigOrDie(config.GetConfigOrDie())
-	}
-	if w.opt.dynamicClient == nil {
-		w.opt.dynamicClient = dynamic.NewForConfigOrDie(config.GetConfigOrDie())
-	}
+// Deprecated: use NewWebhookHelper instead
+func NewNewWebhookHelper(opt Option) (*WebhookHelper, error) {
+	return NewWebhookHelper(opt)
+}
 
-	return w
+// Deprecated: use NewWebhookHelperOrDie instead
+func NewNewWebhookHelperOrDie(opt Option) *WebhookHelper {
+	return NewWebhookHelperOrDie(opt)
 }
 
 // Setup is a non-block method
@@ -134,7 +126,7 @@ func (w *WebhookHelper) ensureCertReady(ctx context.Context, errC chan<- error) 
 			Name:      w.opt.SecretName,
 			Namespace: w.opt.Namespace,
 		},
-	}, w.opt.Webhooks, w.opt.kubeClient, w.opt.dynamicClient)
+	}, w.opt.Webhooks, w.opt.KubeClient, w.opt.DynamicClient)
 
 	go func() {
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, w.opt.TimeoutForEnsureCertReady)
@@ -245,20 +237,25 @@ func (o *Option) ValidateAndFillDefaultValues() error {
 		o.TimeoutForCheckServerStarted = defaultTimeoutForCheckServerStarted
 	}
 
-	conf, err := config.GetConfig()
-	if err != nil {
-		log.Error(err, "unable to get kubeconfig")
-		return err
-	}
-	if o.kubeClient == nil {
-		o.kubeClient, err = kubernetes.NewForConfig(conf)
+	if o.KubeClient == nil {
+		conf, err := config.GetConfig()
+		if err != nil {
+			log.Error(err, "unable to get kubeconfig")
+			return err
+		}
+		o.KubeClient, err = kubernetes.NewForConfig(conf)
 		if err != nil {
 			log.Error(err, "unable creates a new kubernetes.Interface for the given config")
 			return err
 		}
 	}
-	if o.dynamicClient == nil {
-		o.dynamicClient, err = dynamic.NewForConfig(conf)
+	if o.DynamicClient == nil {
+		conf, err := config.GetConfig()
+		if err != nil {
+			log.Error(err, "unable to get kubeconfig")
+			return err
+		}
+		o.DynamicClient, err = dynamic.NewForConfig(conf)
 		if err != nil {
 			log.Error(err, "unable creates a new dynamic.Interface for the given config")
 			return err

@@ -100,7 +100,7 @@ func setupWebhook(ctx context.Context, mgr manager.Manager, errC chan<- error) {
 		ensureCertThenExit(ctx, opt)
 	}
 
-	h, err := ctlrhelper.NewNewWebhookHelper(opt)
+	h, err := ctlrhelper.NewWebhookHelper(opt)
 	if err != nil {
 		entryLog.Error(err, "unable creates a new WebhookHelper")
 		errC <- err
@@ -115,7 +115,7 @@ func setupWebhook(ctx context.Context, mgr manager.Manager, errC chan<- error) {
 
 func ensureCertThenExit(ctx context.Context, opt ctlrhelper.Option) {
 	entryLog.Info("will ensure cert then exist")
-	h, err := ctlrhelper.NewNewWebhookHelper(opt)
+	h, err := ctlrhelper.NewWebhookHelper(opt)
 	if err != nil {
 		entryLog.Error(err, "unable creates a new WebhookHelper")
 		os.Exit(1)
